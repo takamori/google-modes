@@ -15,8 +15,9 @@ skip whitespace {
     goto identifier ";" |
     return Expression? ";" |
     Struct |
+    Label |
+    Macro ";"? |
     DeclType DeclRest |
-    Label Statement |
     ";" |
     Expression ";"
   }
@@ -27,22 +28,19 @@ skip whitespace {
 
   DeclRest {
     Declarator
-    (~("(" (")" | modifier | qualifier | typeModifier | auto | maybeTypeName)) FunctionDef |
+    (Macro ";"? |
+     ~("(" (")" | modifier | qualifier | typeModifier | auto | maybeTypeName)) FunctionDef |
      Initializer? ("," declName Initializer?)* ";")
   }
 
   Declarator {
-    declOp* declName | "(" Declarator ")"
+    declOp* declName ("[" "]")* | "(" Declarator ")"
   }
 
   Loop {
     for "(" Statement Expression? ";" Expression? ")" Statement |
     while CondExpr Statement |
     do Statement while CondExpr ";"
-  }
-
-  Conditional {
-    if CondExpr Statement (else Statement)?
   }
 
   Switch {
@@ -58,10 +56,10 @@ skip whitespace {
   }
 
   context BlockOf(element, separator) {
-    "{" (element (separator element)*)? "}"
+    "{" (element (separator element?)*)? "}"
   }
 
-  Enum { enum declName? BlockOf(declName (op("=") Expression)?, ",")? }
+  Enum { enum typeDeclName? BlockOf(propDeclName (op("=") Expression)?, ",")? }
 
   Initializer { op("=") Expression }
 
@@ -74,7 +72,7 @@ skip whitespace {
   }
 
   ExpressionPrefix {
-    prefixOp | sizeof
+    prefixOp
   }
 
   BaseExpression {
@@ -83,6 +81,8 @@ skip whitespace {
     number |
     string |
     BlockOf(Expression, ",") |
+    sizeof ("(" Type ")" | "..."? Expression) 
+    macroName |
     variableName
   }
 
@@ -127,6 +127,18 @@ skip whitespace {
   ListOf(expr) {
     (expr ("," expr)*)?
   }
+
+  Macro {
+    macroName ArgList?
+  }
+}
+
+Conditional {
+  if whitespace CondExpr whitespace Statement Alternative
+}
+
+context Alternative {
+  whitespace (else whitespace Statement)?
 }
 
 tokens {
@@ -143,7 +155,7 @@ tokens {
   case { kw("case") }
   switch { kw("switch") }
   structUnion { kw("struct" | "union") }
-  sizeof { kw("sizeof") }
+  sizeof { kw("sizeof" | "alignof") }
   auto { kw("auto") }
   modifier { kw("register" | "static" | "extern" | "typedef") }
   typeModifier="type" { ("unsigned" | "signed" | "long") !identifierChar }
@@ -151,6 +163,8 @@ tokens {
   qualifier { kw("const" | "volatile") }
 
   atom="atom" { ("true" | "false" | "null") !identifierChar }
+
+  macroName="meta" { "_" ("A"-"Z" | "_")+ | "A"-"Z"+ "_" ("A"-"Z" | "_")* }
 
   variableName { plainVariableName }
 
@@ -192,13 +206,15 @@ identifier { identifierStart identifierChar* }
 
 whitespace {
   (" " | "\t" |
-   "\n" preprocessorLine? |
+   "\n" (" " | "\t")* preprocessorLine? |
    comment)*
 }
 
 preprocessorLine="meta" { "#" (!("//" | "/*" | "\\") . | "\\" _ )* }
 
 declName="def" { identifier }
+propDeclName="def property" { identifier }
+typeDeclName="type def" { identifier }
 
 fieldName="property" { maybeCallee }
 
@@ -209,7 +225,7 @@ typeNameInner="type" { identifier }
 maybeTypeName {
   // The lookahead tries to figure out whether this identifier is
   // followed by optionally some type suffix and then another identifier
-  typeNameInner ~(!identifierChar whitespace TypeSuffix* whitespace identifierStart)
+  typeNameInner ~(!identifierChar whitespace (TypeSuffix whitespace)* identifierStart)
 }
 
 kw(value)="keyword" { value !identifierChar }

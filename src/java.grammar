@@ -10,7 +10,7 @@ skip whitespace {
     while CondExpr Statement |
     try Block (catch "(" Modifier* Type ("|" Type)* declName ")" Block)* (finally Block)? |
     do Statement while CondExpr ";" |
-    if CondExpr Statement (else Statement)? |
+    Conditional |
     switch CondExpr Block |
     breakCont identifier ? ";" |
     assert Expr (":" Expr)? ";" |
@@ -19,7 +19,7 @@ skip whitespace {
     (default | case Expr | labelIdentifier) ":" |
     import kw("static")? identifierDot* ("*" | identifier) ";" |
     ";" |
-    BeforeStatement(Modifier*) Declaration |
+    BeforeStatement(Modifier*) Declaration(declName) |
     ExprComma ";"
   }
 
@@ -34,31 +34,42 @@ skip whitespace {
   }
 
   AnnotationHead="meta" {
-    "@" identifier ("." identifier)*
+    !atInterface "@" identifier ("." identifier)*
   }
 
   context EnumBody {
     "{" (EnumConstant ","?)+ (";" ClassItem*)? "}"
   }
   context EnumConstant {
-    Annotation? declName ArgList? ClassBody?
+    Annotation? propDeclName ArgList? ClassBody?
   }
 
-  Declaration {
+  Declaration(name) {
     Block |
-    enum declName (implements CommaSep(Type))? EnumBody |
-    classInterface declName TypeParams? (extends Type)? (implements CommaSep(Type))? ClassBody |
+    enum typeDeclName (implements CommaSep(Type))? EnumBody |
+    classInterface typeDeclName TypeParams? (extends Type)? (implements CommaSep(Type))? ClassBody |
+    atInterface declName AnnotationTypeBody |
     package identifier ("." identifier)* ";" |
     ~(Annotation* TypeParams? (primType | packageQualifier* className))
-      Type DeclExpr (FunctionDef | (op("=") Expr)? ("," DeclExpr (op("=") Expr)?)* ";")
+      Type DeclExpr(name) (FunctionDef | (op("=") Expr)? ("," DeclExpr(name) (op("=") Expr)?)* ";")
   }
 
   context ClassItem {
-    BeforeStatement(Modifier*) TypeParams? (declNameParen FunctionDef | Declaration)
+    BeforeStatement(Modifier*) TypeParams? (propDeclNameParen FunctionDef | Declaration(propDeclName))
   }
 
   context ClassBody {
     "{" ClassItem* "}"
+  }
+
+  context AnnotationTypeItem {
+    BeforeStatement(Modifier*)
+    (declNameParenBracketOrEquals (("[" "]")* op("=") Expr) | "(" ")" ("[" "]")* (default Expr)? |
+     Declaration(declName))
+  }
+
+  context AnnotationTypeBody {
+    "{" AnnotationTypeItem* "}"
   }
 
   context Block { "{" Statement* "}" }
@@ -67,7 +78,7 @@ skip whitespace {
 
   context ThrowsClause { throws CommaSep(Type) }
 
-  context ParamList { "(" CommaSep((Annotation | Modifier)* Type "..."? (this | DeclExpr)) ")" }
+  context ParamList { "(" CommaSep((Annotation | Modifier)* Type "..."? (this | DeclExpr(declName))) ")" }
   context SimpleParamList { "(" CommaSep(declName) ")" }
 
   context TypeParams { "<" CommaSep(Annotation* typeDeclName (extends Type)*) ">" }
@@ -96,7 +107,7 @@ skip whitespace {
   ExprSuffix {
     ArgList |
     "[" Expr "]" |
-    "." (TypeArgs | calleeField | fieldName) |
+    "." (kw("class") | TypeArgs | calleeField | fieldName) |
     suffixOp |
     (binOp | instanceof) Expr |
     op("?") Expr op(":") Expr
@@ -119,9 +130,16 @@ skip whitespace {
     Annotation* typeID TypeArgs*
   }
 
-  DeclExpr { declName ("[" "]")? }
+  DeclExpr(name) { name ("[" "]")? }
 
   CommaSep(expr) { (expr ("," expr)*)? }
+}
+
+Conditional {
+  if whitespace CondExpr whitespace Statement Alternative
+}
+context Alternative {
+  whitespace (else whitespace Statement)?
 }
 
 tokens {
@@ -152,6 +170,7 @@ tokens {
   package { kw("package") }
   import { kw("import") }
   classInterface { kw("class" | "interface") }
+  atInterface { kw("@interface") }
   instanceof { kw("instanceof") }
 
   primType="type" { ("boolean" | "char" | "byte" | "short" | "int" | "long" | "float" | "double" | "void") !identifierChar }
@@ -199,7 +218,9 @@ whitespace {
 }
 
 declName="def" { identifier }
-declNameParen="def" { identifier ~(" "* "(") }
+propDeclName="def property" { identifier }
+propDeclNameParen="def property" { identifier ~(" "* "(") }
+declNameParenBracketOrEquals="def" { identifier ~(" "* ("(" | "[" | "=")) }
 
 typeDeclName="type def" { identifier }
 

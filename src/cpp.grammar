@@ -2,21 +2,23 @@ extends "./c.grammar"
 
 skip whitespace {
   context Statement {
+    Attributes |
     Class |
-    namespace declName? (op("=") variableName ";" | Block) |
+    StaticAssert |
+    namespace declName? (op("=") variableName ";" | NamespaceBlock) |
     throw Expression ";" |
     try Block (catch "(" Type Declarator? ")" Block)* |
     asm "{" string "}" |
-    using (typename Type | namespace? variableName) ("=" Type)? ";" |
+    Using |
     Template |
     &constructorAhead declName FunctionDef |
-    nameQualifier+ (MaybeType DeclRest | qualifiedVariableName ExpressionSuffix* ";") |
     super
   }
 
   TypeSuffix {
     TemplateArgs |
-    "::" Type |
+    "::" qualifiedTypeName |
+    Attributes |
     super
   }
 
@@ -38,7 +40,7 @@ skip whitespace {
   }
 
   Lambda {
-    "[" ListOf("&" variableName? | "=" | this) "]" FunctionDef
+    ~("[" spaceChar* ("&" | "=" | "this" | "]")) "[" ListOf("&" variableName? | "=" | this) "]" (FunctionDef | Block)
   }
 
   context FunctionDef {
@@ -46,21 +48,28 @@ skip whitespace {
     qualifier*
     ("&" | "&&")?
     (noexcept ("(" Expression ")")? | throw "(" ListOf(Type) ")")?
+    Attributes?
     ("->" Type)?
+    virtSpec*
     InitializerList?
-    (";" | Block)
+    (";" | Block | op("=") (default | delete) ";")
   }
 
   context Template {
     export? template TemplateParams whitespace Statement
   }
 
+  Using {
+    using (typename Type | namespace? variableName) (op("=") Type)? ";"
+  }
+
+
   context InitializerList { (":" ListOf(CtorInitializer)) }
 
   CtorInitializer { fieldName ("(" ListOf(Expression) ")" | "{" ListOf(Expression) "}") }
 
   ExpressionPrefix {
-    delete ("[" "]")? | new ("[" "]")? ("(" Expression ")")? | super
+    delete ("[" "]")? | new ("[" "]")? ("(" Expression ")")? Attributes? | super
   }
 
   Type {
@@ -68,7 +77,7 @@ skip whitespace {
   }
 
   context TemplateParams {
-    "<" ListOf(TypeParam | modifier* Type declName (op("=") ExpressionNoGt)?) ">"
+    "<" ListOf(TypeParam | modifier* Type "..."? declName (op("=") ExpressionNoGt)?) ">"
   }
 
   TypeParam {
@@ -76,7 +85,7 @@ skip whitespace {
   }
 
   context TemplateArgs {
-    "<" ListOf(TypeArg | modifier* Type Initializer? | number) ">"
+    "<" ListOf(TypeArg | modifier* Type "..."? (ParamList | Initializer)? | number) ">"
   }
 
   TypeArg {
@@ -84,21 +93,51 @@ skip whitespace {
   }
 
   Class {
-    (class | structUnion) (alignas "(" number ")")? declName (":" virtual? access? Type)? (";" | ClassBody)
+    (class | structUnion) Attributes? typeDeclName (":" virtual? access? Type)? (";" | ClassBody ";"?)
   }
 
   context ClassBody {
-    "{" (access ":" | Template | ObjectMember)* "}"
+    "{" ClassItem* "}"
+  }
+
+  context ClassItem {
+    access ":" | Template | Using | StaticAssert | Macro ";"? | Class | ObjectMember
   }
 
   context ObjectMember {
     (modifier | qualifier)*
-    (ctorDtorName | Type Declarator)
-    (FunctionDef | (Initializer | ":" number | "[" number? "]")? ";")
+    (ctorDtorName | Type PropDeclarator)
+    (FunctionDef | (Initializer | ":" number | "[" number? "]")? ";" | Macro ";"?)
+  }
+
+  PropDeclarator {
+    declOp* propDeclName ("[" "]")* | "(" PropDeclarator ")"
   }
 
   Initializer { super | BlockOf(Expression, ",") | ArgList }
+
+  context NamespaceBlock { "{" Statement* "}" }
+
+  Attributes {
+    (alignas "(" number ")" | Attribute)+
+  }
+  Attribute {
+    ~("[" " "* "[") "[" "[" ListOf(NameQualifier(attributeName)* attributeName ("(" BalancedToken* ")")? "..."?) "]" "]"
+  }
+  BalancedToken {
+    number | string | identifier | binOp | "," | "(" BalancedToken* ")" | "[" BalancedToken* "]" | "{" BalancedToken* "}"
+  }
+
+  StaticAssert {
+    staticAssert ArgList ";"
+  }
+
+  MatchingAngleBrackets {
+    "<" (!">" (MatchingAngleBrackets | string | _))* ">"
+  }
 }
+
+NameQualifier(type) { "::" | ~(type MatchingAngleBrackets? whitespace "::") type TemplateArgs? whitespace "::" }
 
 tokens {
   namespace { kw("namespace") }
@@ -119,15 +158,16 @@ tokens {
   operator { kw("operator") }
   using { kw("using") }
   alignas { kw("alignas") }
+  staticAssert { kw("static_assert") }
   cast { kw(("dynamic" | "static" | "const" | "reinterpret") "_cast") }
+  virtSpec { kw("override" | "final" | "new") }
   atom="atom" { "nullptr" !identifierChar | super }
 
 
   variableName {
-    nameQualifier+ ((qualifiedTemplateName TemplateArgs)  | initializedName | qualifiedVariableName) |
+    NameQualifier(variableQualifier)+ (qualifiedInitializedName | qualifiedVariableName) (TemplateArgs (~"::" variableName)?)? |
     initializedName |
-    unqualifiedTemplateName TemplateArgs |
-    unqualifiedVariableName
+    unqualifiedVariableName TemplateArgs?
   }
 
   modifier { kw("inline" | "virtual" | "explicit" | "friend" | "constexpr") | super }
@@ -150,39 +190,38 @@ tokens {
 
 digits { (digit | "'")* }
 
-nameQualifier="meta" { "::" | identifier " "* "::" }
+variableQualifier="variable qualifier" { identifier }
 
-colons="meta" { "::" }
+attributeName="meta" { identifier }
 
-parameterizedQualifier="meta" { identifier ~(" "* "<") }
+rawPropDeclName="def property" { identifier }
+propDeclName { operator overloadableOp | rawPropDeclName }
 
-declQualifier { parameterizedQualifier whitespace TemplateArgs colons qualifiedDeclName | nameQualifier }
+declName { NameQualifier(declQualifier)+ qualifiedDeclName | unqualifiedDeclName }
 
-declName { operator (binOp | prefixOp) | declQualifier+ qualifiedDeclName | unqualifiedDeclName }
-
-typeDeclName="type def" { identifier }
+overloadableOp { op("->*") | "," | binOp | prefixOp | "(" ")" | "[" "]" | (new | delete) ("[" "]")? }
 
 declOp { "*" | "&&" | "&" }
 
 unqualifiedDeclName="def" { "~"? identifier }
 qualifiedDeclName="qualified def" { "~"? identifier }
+declQualifier="qualifier def" { identifier }
 
 initializedName="type" { identifier ~"{" }
+qualifiedInitializedName="type qualified" { identifier ~"{" }
 
 unqualifiedVariableName="variable" { maybeCallee }
 
 qualifiedVariableName="qualified" { unqualifiedVariableName }
 
-qualifiedTemplateName="variable qualified" { identifier ~"<" }
-unqualifiedTemplateName="variable" { identifier ~"<" }
-
-typeNameInner { (typename whitespace)? nameQualifier* unqualifiedTypeName }
+typeNameInner { (typename whitespace)? (NameQualifier(typeQualifier)+ qualifiedTypeName | unqualifiedTypeName) }
 
 unqualifiedTypeName="type" { identifier }
+qualifiedTypeName="type qualified" { identifier }
+typeQualifier="type qualifier" { identifier }
 
 maybeTypeName {
-  typename whitespace nameQualifier* unqualifiedTypeName |
-  !(("new" | "delete") !identifierChar) nameQualifier* unqualifiedTypeName ~(whitespace TypeSuffix* whitespace identifierStart)
+  ~(!(("new" | "delete") !identifierChar) typeNameInner whitespace (TypeSuffix whitespace)* identifierStart) typeNameInner
 }
 
 ctorDtorName="def" { &localConstructorAhead "~"? identifier }

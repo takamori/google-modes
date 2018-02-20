@@ -10,11 +10,6 @@ function isSwitch(context) {
     /^switch\b/.test(context.startLine.slice(context.startPos))
 }
 
-function isNamespace(context) {
-  return context && context.name == "Statement" &&
-    /^namespace\b/.test(context.startLine.slice(context.startPos))
-}
-
 function isLabel(text) {
   return text && /^\s*(case|default)\b/.test(text)
 }
@@ -24,66 +19,75 @@ function aligned(cx) {
 }
 
 const bracketed = {
-  Block: "}", BlockOf: "}", ClassBody: "}", ObjectLiteral: "}", EnumBody: "}", ArrayInitializer: "}",
+  Block: "}", BlockOf: "}", ClassBody: "}", AnnotationTypeBody: "}", ObjectLiteral: "}", EnumBody: "}",
+  ArrayInitializer: "}", NamespaceBlock: "}",
   ArrayLiteral: "]",
   ParamList: ")", SimpleParamList: ")", ArgList: ")", ParenExpr: ")", CondExpr: ")", ForSpec: ")",
   TypeParams: ">", TypeArgs: ">", TemplateArgs: ">", TemplateParams: ">"
+}
+
+function baseIndent(cx, config) {
+  for (let startLine = cx.startLine;; cx = cx.parent) {
+    if (cx.name == "CondExpr")
+      return CodeMirror.countColumn(cx.startLine, cx.startPos + 1, config.tabSize)
+    if (!cx.parent || cx.parent.startLine != startLine)
+      return CodeMirror.countColumn(cx.startLine, null, config.tabSize)
+  }
+}
+
+function findIndent(cx, textAfter, config) {
+  if (!cx) return 0
+  if (cx.name == "string" || cx.name == "comment") return CodeMirror.Pass
+
+  let brack = bracketed[cx.name]
+  let closed = textAfter && textAfter.charAt(0) == brack
+  if (brack && config.align !== false && aligned(cx))
+    return CodeMirror.countColumn(cx.startLine, cx.startPos, config.tabSize) + (closed ? 0 : 1)
+
+  if (brack && (cx.name == "Block" || cx.name == "NamespaceBlock" || cx.name == "ClassBody" ||
+                cx.name == "AnnotationTypeBody" || cx.name == "BlockOf" || cx.name == "EnumBody")) {
+    let parent = cx.parent
+    if (parent && parent.name == "Statement" && parent.parent &&
+        parent.parent.name == "Statement" && hasSubStatement(parent.parent))
+      parent = parent.parent
+    let base = statementIndent(parent, config)
+
+    if (closed || cx.name == "NamespaceBlock") return base
+    if (/^(public|private|protected)\s*:/.test(textAfter)) return base + 1
+    if (isSwitch(cx.parent) && !isLabel(textAfter)) return base + 2 * config.indentUnit
+    return base + config.indentUnit
+  }
+
+  let base = baseIndent(cx, config.tabSize)
+  if (brack) {
+    if (closed && brack != ")") return base
+    return base + config.indentUnit * (brack == ")" || brack == ">" ? 2 : 1)
+  } else if (cx.name == "Statement" || cx.name == "ObjectMember" || cx.name == "ClassItem" || cx.name == "EnumConstant" ||
+             cx.name == "AnnotationTypeItem") {
+    if (hasSubStatement(cx)) return base + config.indentUnit;
+    return base + 2 * config.indentUnit
+  } else if (cx.name == "Alternative") {
+    base = baseIndent(cx.parent, config.tabSize)
+    if (!textAfter || /^else\b/.test(textAfter)) return base
+    return base + config.indentUnit
+  } else if (cx.name == "ArrowRest") {
+    return base + config.indentUnit
+  } else if (cx.name == "InitializerList") {
+    return base + 2
+  } else if (cx.name == "ThrowsClause" && !/throws\s*$/.test(cx.startLine.slice(cx.startPos))) {
+    return base + 2 * config.indentUnit
+  } else {
+    return findIndent(cx.parent, textAfter, config)
+  }
 }
 
 function statementIndent(cx, config) {
   for (;; cx = cx.parent) {
     if (!cx) return 0
     if (cx.name == "Statement" || cx.name == "ObjectMember" || cx.name == "ClassItem" || cx.name == "NewExpr" ||
-        cx.name == "EnumConstant" || cx.name == "Template")
+        cx.name == "EnumConstant" || cx.name == "Template" || cx.name == "AnnotationTypeItem" ||
+        cx.parent && bracketed[cx.parent.name])
       return CodeMirror.countColumn(cx.startLine, null, config.tabSize)
-  }
-}
-
-function plus(result, add) {
-  return typeof result == "number" ? result + add : result
-}
-
-function findIndent(cx, textAfter, curLine, config) {
-  if (!cx) return 0
-  if (cx.name == "string" || cx.name == "comment") return CodeMirror.Pass
-
-  let brack = bracketed[cx.name]
-  if (brack) {
-    let closed = textAfter && textAfter.charAt(0) == brack
-    if (config.align !== false && curLine != cx.startLine && aligned(cx))
-      return CodeMirror.countColumn(cx.startLine, cx.startPos, config.tabSize) + (closed ? 0 : 1)
-
-    if (cx.name == "Block" || cx.name == "ClassBody" || cx.name == "BlockOf" || cx.name == "EnumBody") {
-      // Skip wrapping statement context
-      let skipCx = cx
-      if (cx.parent && cx.parent.name == "Statement" && cx.parent.parent &&
-          cx.parent.parent.name == "Statement" && hasSubStatement(cx.parent.parent))
-        skipCx = cx.parent.parent
-      return statementIndent(skipCx, config) + (
-        /^(public|private|protected)\s*:/.test(textAfter) ? 1 :
-        closed || isNamespace(cx.parent) ? 0 :
-        isSwitch(cx.parent) && !isLabel(textAfter) ? 2 * config.indentUnit
-        : config.indentUnit
-      )
-    }
-
-    let flat = closed && brack != ")" || curLine == cx.startLine && cx.name != "CondExpr"
-    return findIndent(cx.parent, closed ? null : textAfter, cx.startLine, config) +
-      (flat ? 0 : config.indentUnit * (brack == ")" || brack == ">" ? 2 : 1))
-  } else if (cx.name == "Statement" || cx.name == "ObjectMember" || cx.name == "ClassItem" || cx.name == "EnumConstant") {
-    let base = statementIndent(cx, config)
-    if (!curLine && hasSubStatement(cx))
-      return base + (/^else\b/.test(textAfter) ? 0 : config.indentUnit)
-    let flat = curLine == cx.startLine ||
-        curLine && CodeMirror.countColumn(curLine, null, config.tabSize) <= base
-    return base + (flat ? 0 : 2 * config.indentUnit)
-  } else if (cx.name == "ArrowRest") {
-    return plus(findIndent(cx.parent, textAfter, cx.startLine, config), config.indentUnit)
-  } else {
-    return plus(findIndent(cx.parent, textAfter, curLine, config),
-                cx.name == "InitializerList" ? 2 :
-                cx.name == "ThrowsClause" && !/throws\s*$/.test(cx.startLine.slice(cx.startPos)) ? 2 * config.indentUnit :
-                0)
   }
 }
 
@@ -95,5 +99,5 @@ export function indent(state, textAfter, line, config) {
   if ((top == "doccomment.braced" || top == "doccomment.tagGroup") && !/^\s*(@|\*\/)/.test(textAfter))
     return CodeMirror.countColumn(state.context.startLine, null, config.tabSize) + 2 * config.indentUnit
 
-  return findIndent(state.contextAt(line, line.length - textAfter.length), textAfter, null, config)
+  return findIndent(state.contextAt(line, line.length - textAfter.length), textAfter, config)
 }

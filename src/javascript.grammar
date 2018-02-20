@@ -9,16 +9,16 @@ skip whitespace {
     Block |
     ";" |
     debugger |
-    if CondExpr Statement (else Statement)? |
+    Conditional |
     function asyncStar? declName FunctionDef |
-    for ForSpec Statement |
+    for ForStatement |
     Label |
     return (semi | Expression semi) |
     throw Expression semi |
     breakCont identifier? semi |
     switch CondExpr Block |
     try Block (catch "(" declName ")" Block)? (finally Block)? |
-    class declName ClassDef |
+    class typeDeclName ClassDef |
     Export |
     Import |
     async Statement |
@@ -32,6 +32,7 @@ skip whitespace {
 
   Label { (default | labelName | case Expression) ":" }
 
+  context ForStatement { ForSpec Statement }
   context ForSpec {
     "(" Statement (kw("of") Expression | Expression? ";" Expression?)? ")"
   }
@@ -69,7 +70,7 @@ skip whitespace {
     (kwPrefix | prefixOp | async) BaseExpression |
     new ("." kw("target") | BaseExpression) |
     function asyncStar? declName? FunctionDef |
-    class (!kw("extends") declName)? ClassDef |
+    class (!kw("extends") typeDeclName)? ClassDef |
     ArrowFunc |
     calleeName |
     variable |
@@ -88,11 +89,11 @@ skip whitespace {
 
   context ArrayLiteral { "[" CommaSep(ExpressionNoComma) "]" }
 
-  context ObjectLiteral { "{" CommaSep(ObjectMember(propName)) "}" }
+  context ObjectLiteral { "{" CommaSep(ObjectMember) "}" }
 
-  context ObjectMember(name) {
+  context ObjectMember {
     propModifier?
-    ((name | "[" Expression "]" | number | string) (asyncStar? FunctionDef | ":" ExpressionNoComma)? |
+    ((propDeclName | "[" Expression "]" | number | string) (asyncStar? FunctionDef | ":" ExpressionNoComma)? |
      "..." ExpressionNoComma)
   }
 
@@ -123,7 +124,7 @@ skip whitespace {
   }
 
   context ClassBody {
-    "{" (kw("static")? ObjectMember(declName) | "@" Expression)* "}"
+    "{" (kw("static")? ObjectMember | "@" Expression)* "}"
   }
 
   Pattern {
@@ -141,6 +142,13 @@ skip whitespace {
   }
 
   CommaSep(expr) { (expr ("," expr?)*)? }
+}
+
+Conditional {
+  if whitespace CondExpr whitespace Statement Alternative
+}
+context Alternative {
+  whitespace (else whitespace Statement)?
 }
 
 tokens {
@@ -209,7 +217,9 @@ op(value)="operator" { value }
 str2(value)="string-2" { value }
 
 propName="property" { identifier }
+propDeclName="def property" { identifier }
 declName="def" { identifier }
+typeDeclName="type def" { identifier }
 calleeName="variable callee" { identifier ~(" "* "(") }
 calleeProp="property callee" { identifier ~(" "* "(") }
 labelName { identifier ~(" "* ":") }
